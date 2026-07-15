@@ -73,12 +73,12 @@ Headline: **2.3718 → 1.76 bpb, a 26% reduction**, entirely from training effic
 - **Result:** **dev bpb 1.835** (vs 1.8322 at R6) — no improvement, marginally worse. Cost: 413 ms/step, 826 s total (2.8x R6's wall-clock).
 - **Conclusion:** this is the key negative result. Maxing the parameter budget does NOT help under a 2,000-step cap: the larger model + longer context are undertrained, so bpb stalls while wall-clock triples. Confirms the compute/step-optimal intuition — the bottleneck is optimizer steps, not capacity. Reverting to the efficient R6 config (vocab 1024, block 128, 4 layers) and spending effort on things that improve per-step learning (batch size, LR) instead of raw size.
 
-## Run 8 — batch 32 -> 64 (back to R6 config: vocab 1024, block 128)
+## Run 8 — batch 32 -> 64  ***(FINAL CONFIGURATION, this is `ckpt.pt`)***
 
 - **Hypothesis:** since steps are capped, the cheapest way to feed more data into the fixed step budget is a bigger batch. R5 already showed 8 -> 32 helped a lot; test 64.
-- **Change vs R6:** `--batch 64` (reverted vocab to 1024, block 128, 4 layers).
-- **Result:** **dev bpb 1.76** (vs 1.8322). 298 ms/step, 597 s.
-- **Conclusion:** another clear win (-0.07). Confirms the lever is tokens-per-step, not model size. Larger batch also allows a higher LR — test batch 128 with a bumped LR next.
+- **Change vs R6:** `--batch 64` (vocab 1024, block 128, 4 layers, everything else unchanged).
+- **Result:** **dev bpb 1.76** (vs 1.8322). 298 ms/step, 597 s. 1,421,760 params, 2,000 steps.
+- **Conclusion:** another clear win (-0.07) and the best measured configuration, so this is the submitted `ckpt.pt`. Confirms the lever is tokens-per-step, not model size: over 2,000 steps, batch 8/32/64 see ~2.05M / ~8.19M / ~16.38M target tokens respectively. Larger batch would likely help further (with a re-tuned LR), but was capped here by CPU wall-clock — see "What I'd try next".
 
 ## Run 9 — scorer-aligned suffix loss (batch 64)
 
