@@ -14,10 +14,11 @@ All runs: 2,000 optimizer steps, CPU, scored with `evaluate.py` on `../data/dev_
 | 5 | Batch 8 → 32 | 1.9629 | -0.282 | yes |
 | 6 | Corpus-trained BPE, vocab 1024 | 1.8322 | -0.131 | yes |
 | 7 | Spend full param budget (1.9M: vocab 2048, block 256, 5 layers) | 1.835 | +0.003 | no |
-| 8 | Batch 32 → 64 | **1.76** | -0.072 | **FINAL** |
+| 8 | Batch 32 → 64 | 1.76 | -0.072 | yes |
 | 9 | Scorer-aligned suffix loss (batch 64) | 1.8429 | +0.083 | no |
+| 10 | Re-tuned LR 1e-3 → 1.4e-3 at batch 64 | **1.728** | -0.032 | **FINAL** |
 
-Headline: **2.3718 → 1.76 bpb, a 26% reduction**, entirely from training efficiency (optimizer, tokenizer, batch) — not from a bigger model. Three ambitious ideas (Runs 4, 7, 9) were tried, lost, diagnosed, and reverted; that reasoning is below.
+Headline: **2.3718 → 1.728 bpb, a 27% reduction**, entirely from training efficiency (optimizer, tokenizer, batch, LR) — not from a bigger model. Three ambitious ideas (Runs 4, 7, 9) were tried, lost, diagnosed, and reverted; that reasoning is below.
 
 ## Run 1 — Baseline (unmodified starter)
 
@@ -73,12 +74,19 @@ Headline: **2.3718 → 1.76 bpb, a 26% reduction**, entirely from training effic
 - **Result:** **dev bpb 1.835** (vs 1.8322 at R6) — no improvement, marginally worse. Cost: 413 ms/step, 826 s total (2.8x R6's wall-clock).
 - **Conclusion:** this is the key negative result. Maxing the parameter budget does NOT help under a 2,000-step cap: the larger model + longer context are undertrained, so bpb stalls while wall-clock triples. Confirms the compute/step-optimal intuition — the bottleneck is optimizer steps, not capacity. Reverting to the efficient R6 config (vocab 1024, block 128, 4 layers) and spending effort on things that improve per-step learning (batch size, LR) instead of raw size.
 
-## Run 8 — batch 32 -> 64  ***(FINAL CONFIGURATION, this is `ckpt.pt`)***
+## Run 8 — batch 32 -> 64
 
 - **Hypothesis:** since steps are capped, the cheapest way to feed more data into the fixed step budget is a bigger batch. R5 already showed 8 -> 32 helped a lot; test 64.
 - **Change vs R6:** `--batch 64` (vocab 1024, block 128, 4 layers, everything else unchanged).
 - **Result:** **dev bpb 1.76** (vs 1.8322). 298 ms/step, 597 s. 1,421,760 params, 2,000 steps.
-- **Conclusion:** another clear win (-0.07) and the best measured configuration, so this is the submitted `ckpt.pt`. Confirms the lever is tokens-per-step, not model size: over 2,000 steps, batch 8/32/64 see ~2.05M / ~8.19M / ~16.38M target tokens respectively. Larger batch would likely help further (with a re-tuned LR), but was capped here by CPU wall-clock — see "What I'd try next".
+- **Conclusion:** another clear win (-0.07). Confirms the lever is tokens-per-step, not model size: over 2,000 steps, batch 8/32/64 see ~2.05M / ~8.19M / ~16.38M target tokens respectively. But LR was never re-tuned after the batch grew 8x — test that next.
+
+## Run 10 — re-tune LR 1e-3 -> 1.4e-3 at batch 64  ***(FINAL CONFIGURATION, this is `ckpt.pt`)***
+
+- **Hypothesis:** LR stayed at 1e-3 while batch grew 8x (8 -> 64). Larger batches give lower-variance gradients that tolerate (and want) a higher LR, so the schedule was under-shooting.
+- **Change vs R8:** peak LR 1e-3 -> 1.4e-3 (warmup/cosine/clip/decay all unchanged).
+- **Result:** **dev bpb 1.728** (vs 1.76). 311 ms/step, 623 s. 1,421,760 params, 2,000 steps.
+- **Conclusion:** confirmed and best measured configuration, so this is the submitted `ckpt.pt`. The LR had to scale with the batch — a coupled hyperparameter I'd initially left fixed. Final headline: **2.3718 -> 1.728 bpb (~27%)**, all from step-efficiency, never from added capacity.
 
 ## Run 9 — scorer-aligned suffix loss (batch 64)
 

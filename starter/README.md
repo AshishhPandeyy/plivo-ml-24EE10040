@@ -1,6 +1,6 @@
 # 2,000-Step LLM Speedrun — final submission
 
-Final result: **1.76 dev bits-per-byte** (baseline 2.3718, ~26% lower), within all caps
+Final result: **1.728 dev bits-per-byte** (baseline 2.3718, ~27% lower), within all caps
 (2,000 steps, <2M params, CPU only, provided corpus only, pure PyTorch).
 
 ## Reproduce the final configuration
@@ -13,10 +13,10 @@ All commands run inside this folder (`starter/`).
 python train_bpe.py --data ../data/train_corpus.txt --vocab_size 1024
 ```
 
-2. Train the final model (2,000 steps, batch 64, AdamW + warmup/cosine, LR 1e-3):
+2. Train the final model (2,000 steps, batch 64, AdamW + warmup/cosine, LR 1.4e-3):
 
 ```
-python train.py --data ../data/train_corpus.txt --steps 2000 --lr 1e-3 --batch 64 --out ckpt.pt
+python train.py --data ../data/train_corpus.txt --steps 2000 --lr 1.4e-3 --batch 64 --out ckpt.pt
 ```
 
 3. Score (this is the official, unmodified evaluation command):
@@ -30,7 +30,7 @@ python evaluate.py --checkpoint ckpt.pt --text_file ../data/dev_eval.txt
 - Tokenizer vocabulary: **1,024** (256 raw bytes + 768 corpus-learned merges), ~2.9 bytes/token
 - Model parameters: **~1,421,760** (< 2,000,000 cap)
 - Optimizer steps recorded in `ckpt.pt`: **2,000**
-- Dev bits-per-byte: **~1.76**
+- Dev bits-per-byte: **~1.728**
 
 ## Files
 

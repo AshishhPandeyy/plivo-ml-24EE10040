@@ -44,15 +44,15 @@ Metric: bits per UTF-8 byte (bpb) on a hidden test file &mdash; lower is better.
 
 <div class="kpi">
   <div><small>Baseline bpb</small><b>2.3718</b></div>
-  <div><small>Final bpb</small><b class="win">1.76</b></div>
-  <div><small>Reduction</small><b>~26%</b></div>
+  <div><small>Final bpb</small><b class="win">1.728</b></div>
+  <div><small>Reduction</small><b>~27%</b></div>
   <div><small>Parameters</small><b>1.42M</b><small>of 2.0M cap</small></div>
   <div><small>Steps</small><b>2,000</b><small>exactly</small></div>
 </div>
 
 <p><b>Central finding:</b> the binding resource was <b>optimizer updates, not parameter capacity</b>.
 Every change that helped increased useful learning per update; every change that hurt either added capacity
-that could not be trained in 2,000 steps or reduced gradient throughput. The final 1.76-bpb model is
+that could not be trained in 2,000 steps or reduced gradient throughput. The final 1.728-bpb model is
 deliberately <em>not</em> the largest permitted model &mdash; it is the one that learns most effectively within
 2,000 updates.</p>
 
@@ -91,7 +91,7 @@ deliberately <em>not</em> the largest permitted model &mdash; it is the one that
     <h3>Optimization</h3>
     <ul>
       <li>AdamW, betas (0.9, 0.95)</li>
-      <li>Peak LR 1e-3, 100-step warmup, cosine decay to 0.1x</li>
+      <li>Peak LR 1.4e-3 (re-tuned to the larger batch), 100-step warmup, cosine decay to 0.1x</li>
       <li>Weight decay 0.1 on matrix/embedding params only (none on biases/norms)</li>
       <li>Gradient clipping 1.0</li>
       <li>Batch size 64, block 128, exactly 2,000 steps</li>
@@ -129,8 +129,9 @@ deliberately <em>not</em> the largest permitted model &mdash; it is the one that
   <tr><td>5</td><td>Batch 8 &rarr; 32</td><td>1.9629</td><td class="win">-0.282</td><td>keep</td></tr>
   <tr><td>6</td><td>Corpus-trained BPE, vocab 1,024 (1.42M params)</td><td>1.8322</td><td class="win">-0.131</td><td>keep</td></tr>
   <tr><td>7</td><td>Spend full budget: 1.9M params (vocab 2,048, block 256, 5 layers)</td><td>1.835</td><td class="loss">+0.003</td><td>revert</td></tr>
-  <tr class="best"><td>8</td><td>Batch 32 &rarr; 64 &mdash; FINAL CONFIGURATION</td><td>1.76</td><td class="win">-0.072</td><td>KEEP (final)</td></tr>
+  <tr><td>8</td><td>Batch 32 &rarr; 64</td><td>1.76</td><td class="win">-0.072</td><td>keep</td></tr>
   <tr><td>9</td><td>Evaluation-aligned suffix loss (batch 64)</td><td>1.8429</td><td class="loss">+0.083</td><td>revert</td></tr>
+  <tr class="best"><td>10</td><td>Re-tune LR 1e-3 &rarr; 1.4e-3 at batch 64 &mdash; FINAL CONFIGURATION</td><td>1.728</td><td class="win">-0.032</td><td>KEEP (final)</td></tr>
 </table>
 
 <h2>Three quantitative reasons the winners won</h2>
@@ -147,6 +148,7 @@ deliberately <em>not</em> the largest permitted model &mdash; it is the one that
     <ul>
       <li><b>Optimizer + schedule</b> (Run 2): the baseline was simply under-optimized within the budget.</li>
       <li><b>Bigger batch</b> (Runs 5, 8): the dominant lever &mdash; more useful gradient signal per fixed step.</li>
+      <li><b>LR re-tuned to the batch</b> (Run 10): raising peak LR to 1.4e-3 to match the 8x-larger batch gave the final drop to 1.728.</li>
       <li><b>Corpus-trained BPE</b> (Run 6): more effective context per prediction and fewer wasted tokens on Devanagari.</li>
       <li><b>Weight tying</b>: kept for parameter efficiency at roughly neutral score.</li>
     </ul>
@@ -176,11 +178,11 @@ deliberately <em>not</em> the largest permitted model &mdash; it is the one that
 python train_bpe.py --data ../data/train_corpus.txt --vocab_size 1024
 
 # train the final model (2,000 steps, batch 64, AdamW + warmup/cosine)
-python train.py --data ../data/train_corpus.txt --steps 2000 --lr 1e-3 --batch 64 --out ckpt.pt
+python train.py --data ../data/train_corpus.txt --steps 2000 --lr 1.4e-3 --batch 64 --out ckpt.pt
 
 # official evaluation (unchanged)
 python evaluate.py --checkpoint ckpt.pt --text_file ../data/dev_eval.txt
-# -> {"bpb": 1.76, "n_params": 1421760, "steps": 2000, ...}</code></pre>
+# -> {"bpb": 1.728, "n_params": 1421760, "steps": 2000, ...}</code></pre>
 
 <h2>Human vs. AI-assisted work</h2>
 <div class="cols">
