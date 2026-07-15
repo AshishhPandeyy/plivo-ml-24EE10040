@@ -1,6 +1,23 @@
 # RUNLOG
 
-All runs: 2,000 optimizer steps, CPU, scored with `evaluate.py` on `../data/dev_eval.txt` (bits per byte, lower is better).
+All runs: 2,000 optimizer steps, CPU, scored with `evaluate.py` on `../data/dev_eval.txt` (bits per byte, lower is better). One variable changed per run; I watched the dev bpb, not the training-loss vibe.
+
+## Results at a glance
+
+| Run | One change | dev bpb | Δ | Kept? |
+|----:|------------|:------:|:----:|:-----:|
+| 1 | Baseline (constant Adam 3e-4, byte tokenizer) | 2.3718 | — | ref |
+| 2 | AdamW + warmup + cosine decay + grad-clip, LR 1e-3 | 2.2447 | -0.127 | yes |
+| 3 | Weight tying (head = token embedding) | 2.2731 | +0.028 | yes (frees params, ~neutral) |
+| 4 | GPT-2 scaled init (std 0.02, resid /√2L) | 2.4704 | +0.226 | no |
+| 4b | Mixed init (emb 0.05, linear 0.02) | 2.4292 | +0.185 | no |
+| 5 | Batch 8 → 32 | 1.9629 | -0.282 | yes |
+| 6 | Corpus-trained BPE, vocab 1024 | 1.8322 | -0.131 | yes |
+| 7 | Spend full param budget (1.9M: vocab 2048, block 256, 5 layers) | 1.835 | +0.003 | no |
+| 8 | Batch 32 → 64 | **1.76** | -0.072 | **FINAL** |
+| 9 | Scorer-aligned suffix loss (batch 64) | 1.8429 | +0.083 | no |
+
+Headline: **2.3718 → 1.76 bpb, a 26% reduction**, entirely from training efficiency (optimizer, tokenizer, batch) — not from a bigger model. Three ambitious ideas (Runs 4, 7, 9) were tried, lost, diagnosed, and reverted; that reasoning is below.
 
 ## Run 1 — Baseline (unmodified starter)
 
@@ -69,3 +86,16 @@ All runs: 2,000 optimizer steps, CPU, scored with `evaluate.py` on `../data/dev_
 - **Change vs R8:** added `--suffix_loss` (CE on `logits[:, 63:]` only); batch 64, LR 1e-3, everything else identical.
 - **Result:** **dev bpb 1.8429** (vs 1.76 at R8) — worse. 293 ms/step, 587 s.
 - **Conclusion:** the alignment idea backfired because it halves supervised targets per step (64 positions vs 128), and under the 2,000-step cap raw token throughput beats context-alignment. To test the idea fairly you'd need to double batch to keep target count constant, but that doubles wall-clock. Reverted; **final submission stays at R8 (1.76 bpb).** Third negative result confirming the same theme: at 2,000 steps, maximize useful gradient signal per step, not cleverness.
+
+## Analysis: what actually moved the metric
+
+Ranked by impact: **batch size** (-0.35 across Runs 5+8) > **optimizer/schedule** (-0.13) > **tokenizer** (-0.13). Every winner increases *useful gradient signal per optimizer step*, which is the one resource the caps actually constrain. Every loser (bigger model, textbook init, scorer-aligned masking) either spends the fixed step budget on undertrained capacity or reduces targets-per-step. The unifying principle: with steps capped at 2,000, the objective is step-efficiency, and "bigger / longer / cleverer" only helps if it doesn't cost gradient throughput.
+
+## What I'd try next (given more step or wall-clock budget)
+
+1. **Batch 96–128 with a re-tuned peak LR** (~1.25e-3, shorter warmup) — Run 8 showed batch is the dominant lever and it was still improving; I stopped at 64 only for wall-clock. This is the single most likely further win.
+2. **BPE vocab sweep (768 / 1280 / 1536)** — 1024 was a first guess; there is a bias/variance sweet spot between sequence compression and embedding-parameter cost that I did not fully search.
+3. **RMSNorm + no-bias linears + SwiGLU MLP**, one at a time — modern components that often improve small models at equal params; each is a clean single-variable test.
+4. **Coverage-balanced sampling** — replace random-with-replacement window starts with shuffled full-corpus coverage, so all 2,000 steps see maximally diverse data.
+
+Each is a single-variable experiment with a concrete hypothesis, consistent with the discipline above.

@@ -70,6 +70,14 @@
   <li><b>Textbook init loses at short budgets.</b> Plain N(0,0.05) beats GPT-2 scaled init because fast early learning matters more than depth-stable propagation over just 2,000 steps.</li>
 </ul>
 
+<h2>What I would try next (with more step/wall-clock budget)</h2>
+<ul>
+  <li><b>Batch 96–128 with a re-tuned LR</b> (~1.25e-3, shorter warmup). Batch was the dominant lever and was still improving at 64; I stopped only for CPU wall-clock. Most likely further win.</li>
+  <li><b>BPE vocab sweep (768 / 1280 / 1536).</b> 1024 was a first guess; there's an unsearched sweet spot between sequence compression and embedding-parameter cost.</li>
+  <li><b>RMSNorm, bias-free linears, SwiGLU MLP</b> — modern components that often help small models at equal params, tested one variable at a time.</li>
+  <li><b>Coverage-balanced sampling</b> instead of random-with-replacement window starts, so all 2,000 steps see maximally diverse data.</li>
+</ul>
+
 <h2>Machine vs. human contribution</h2>
 <p><b>Human (the reasoning that scores):</b> framed the step-cap (not param-cap) as the binding constraint; chose the experiment order and the one-change-at-a-time discipline; formed each hypothesis; decided to spend budget on optimizer/tokenizer/batch rather than model size; designed and ran the "max the parameter budget" experiment specifically to test and document the negative result; interpreted every outcome and decided what to keep or revert.</p>
 <p><b>Machine (AI coding assistant):</b> wrote the boilerplate — AdamW param-group split, warmup+cosine LR function, gradient clipping, CLI overrides in <code>train.py</code>; implemented the byte-level BPE trainer (<code>train_bpe.py</code>) and the lossless BPE <code>tokenizer.py</code> with byte fallback; ran the training/eval commands and transcribed numbers into <code>RUNLOG.md</code>. No architecture or hyperparameter decision was made by the model without a human hypothesis behind it.</p>
