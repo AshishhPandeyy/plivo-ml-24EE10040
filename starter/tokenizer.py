@@ -1,23 +1,21 @@
-"""Baseline tokenizer: raw UTF-8 bytes, vocab of 256. Simple, never fails on
-unseen text — and treats a Devanagari character as 3 tokens. Think about
-what that does to your model's context window and your token budget on the
-Hindi part of the corpus.
+"""Byte-level BPE tokenizer, trained on the provided corpus ONLY.
 
-You may replace this with anything you train ON THE PROVIDED CORPUS ONLY
-(e.g., BPE), as long as:
-  1. it can encode ARBITRARY UTF-8 text (byte-level fallback) and it is
-     LOSSLESS: decode(encode(text)) == text, exactly. The scorer and the
-     graders both verify this round-trip — a lossy tokenizer makes bpb
-     meaningless and disqualifies the run.
-  2. this file keeps exposing:  load() -> tokenizer object with
-     .encode(str) -> list[int], .decode(list[int]) -> str, .vocab_size.
-     train.py and evaluate.py call load() with NO arguments — keep any
-     extra parameters optional.
-  3. anything it needs is saved under your submission folder and loaded by
-     load() with no internet. Grading runs with cwd = your folder; resolve
-     saved files relative to __file__ to be safe.
+Vocab = 256 raw bytes + learned merges (loaded from bpe_merges.json). Because
+the base alphabet is all 256 bytes, ANY UTF-8 text encodes losslessly:
+decode(encode(text)) == text exactly (the scorer verifies this). If the merge
+file is missing, we fall back to the plain byte tokenizer (vocab 256), so the
+interface never breaks.
+
+Interface (unchanged): load() -> obj with .encode(str)->list[int],
+.decode(list[int])->str, .vocab_size.
 """
 import json
+import os
+import re
+
+_MERGES_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                            "bpe_merges.json")
+PRETOK = re.compile(r" ?[^\s]+|\s+")
 
 
 class ByteTokenizer:
@@ -34,6 +32,55 @@ class ByteTokenizer:
             json.dump({"type": "byte"}, f)
 
 
+class BPETokenizer:
+    def __init__(self, merges):
+        # merges: list of (a, b) byte/token id pairs, in learned order
+        self.merges = [tuple(m) for m in merges]
+        self.vocab_size = 256 + len(self.merges)
+        # rank of each pair (lower = merge earlier)
+        self.rank = {p: i for i, p in enumerate(self.merges)}
+        # id -> raw bytes, for decoding
+        self.tok_bytes = [bytes([i]) for i in range(256)]
+        for a, b in self.merges:
+            self.tok_bytes.append(self.tok_bytes[a] + self.tok_bytes[b])
+
+    def _encode_chunk(self, ids):
+        while len(ids) >= 2:
+            # find the mergeable adjacent pair with the best (lowest) rank
+            best, best_rank = None, None
+            for p in zip(ids, ids[1:]):
+                r = self.rank.get(p)
+                if r is not None and (best_rank is None or r < best_rank):
+                    best, best_rank = p, r
+            if best is None:
+                break
+            new_id = 256 + best_rank
+            merged, i = [], 0
+            while i < len(ids):
+                if i < len(ids) - 1 and (ids[i], ids[i + 1]) == best:
+                    merged.append(new_id)
+                    i += 2
+                else:
+                    merged.append(ids[i])
+                    i += 1
+            ids = merged
+        return ids
+
+    def encode(self, text):
+        out = []
+        for chunk in PRETOK.findall(text):
+            out.extend(self._encode_chunk(list(chunk.encode("utf-8"))))
+        return out
+
+    def decode(self, ids):
+        b = b"".join(self.tok_bytes[i] for i in ids)
+        return b.decode("utf-8", errors="replace")
+
+
 def load(path=None):
-    """Return the tokenizer used by evaluate.py. Replace as needed."""
+    path = path or _MERGES_FILE
+    if os.path.exists(path):
+        with open(path) as f:
+            data = json.load(f)
+        return BPETokenizer(data["merges"])
     return ByteTokenizer()

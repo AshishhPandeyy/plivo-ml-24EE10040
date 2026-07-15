@@ -11,6 +11,7 @@ HARD CAPS (checked at grading, violations = disqualified run):
     python train.py --data ../data/train_corpus.txt --steps 2000 --out ckpt.pt
 """
 import argparse
+import math
 import time
 
 import torch
@@ -35,9 +36,22 @@ def main():
     ap.add_argument("--steps", type=int, default=2000)
     ap.add_argument("--batch", type=int, default=8)
     ap.add_argument("--lr", type=float, default=3e-4)
+    ap.add_argument("--min_lr_frac", type=float, default=0.1,
+                    help="final lr as fraction of peak lr")
+    ap.add_argument("--warmup", type=int, default=100)
+    ap.add_argument("--weight_decay", type=float, default=0.1)
+    ap.add_argument("--grad_clip", type=float, default=1.0)
     ap.add_argument("--seed", type=int, default=1337)
     ap.add_argument("--out", default="ckpt.pt")
     ap.add_argument("--log_every", type=int, default=100)
+    ap.add_argument("--n_layer", type=int, default=None)
+    ap.add_argument("--n_head", type=int, default=None)
+    ap.add_argument("--n_embd", type=int, default=None)
+    ap.add_argument("--block_size", type=int, default=None)
+    ap.add_argument("--dropout", type=float, default=None)
+    ap.add_argument("--suffix_loss", action="store_true",
+                    help="train only on scorer-aligned positions "
+                         "(>= block/2 left context), matching evaluate.py")
     args = ap.parse_args()
     assert args.steps <= MAX_STEPS, f"cap: max {MAX_STEPS} steps"
     torch.manual_seed(args.seed)
@@ -51,23 +65,54 @@ def main():
 
     cfg = Config()
     cfg.vocab_size = tok.vocab_size
+    for k in ("n_layer", "n_head", "n_embd", "block_size", "dropout"):
+        v = getattr(args, k)
+        if v is not None:
+            setattr(cfg, k, v)
     model = GPT(cfg).to(device)
     n = model.n_params()
     print(f"model: {n:,} params")
     assert n <= MAX_PARAMS, f"cap: max {MAX_PARAMS:,} params"
 
-    # baseline choices, all questionable on purpose:
-    opt = torch.optim.Adam(model.parameters(), lr=args.lr)  # constant LR,
-    # no warmup, no schedule, no weight decay, no gradient clipping.
+    # decay only 2D+ weights (matmuls/embeddings); biases and norms stay at 0
+    decay, no_decay = [], []
+    for p in model.parameters():
+        (decay if p.dim() >= 2 else no_decay).append(p)
+    opt = torch.optim.AdamW(
+        [{"params": decay, "weight_decay": args.weight_decay},
+         {"params": no_decay, "weight_decay": 0.0}],
+        lr=args.lr, betas=(0.9, 0.95))
+
+    def lr_at(step):
+        if step <= args.warmup:
+            return args.lr * step / max(1, args.warmup)
+        t = (step - args.warmup) / max(1, args.steps - args.warmup)
+        min_lr = args.lr * args.min_lr_frac
+        return min_lr + 0.5 * (args.lr - min_lr) * (1 + math.cos(math.pi * t))
 
     model.train()
     t0 = time.time()
     losses = []
     for step in range(1, args.steps + 1):
+        lr = lr_at(step)
+        for g in opt.param_groups:
+            g["lr"] = lr
         x, y = get_batch(ids, cfg.block_size, args.batch, device)
-        _, loss = model(x, y)
+        if args.suffix_loss:
+            # scorer only counts targets with >= block/2 left context (see
+            # evaluate.py sliding window); supervise exactly that region so
+            # every trained target matches the eval context distribution
+            logits, _ = model(x)
+            start = cfg.block_size // 2 - 1
+            loss = torch.nn.functional.cross_entropy(
+                logits[:, start:].reshape(-1, logits.size(-1)),
+                y[:, start:].reshape(-1))
+        else:
+            _, loss = model(x, y)
         opt.zero_grad(set_to_none=True)
         loss.backward()
+        if args.grad_clip > 0:
+            torch.nn.utils.clip_grad_norm_(model.parameters(), args.grad_clip)
         opt.step()
         losses.append(loss.item())
         if step % args.log_every == 0 or step == 1:

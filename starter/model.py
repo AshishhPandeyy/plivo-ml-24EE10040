@@ -16,7 +16,7 @@ class Config:
     n_head = 4
     n_embd = 160
     dropout = 0.0
-    tie_weights = False   # <- one of many things worth questioning
+    tie_weights = True
 
 
 class SelfAttention(nn.Module):
@@ -69,7 +69,8 @@ class GPT(nn.Module):
         self.apply(self._init)
 
     def _init(self, m):
-        # baseline init: plain normal, one std for everything
+        # in a 2,000-step budget, larger init (0.05) trains faster than the
+        # "textbook" GPT-2 scaled init — verified empirically, see RUNLOG
         if isinstance(m, (nn.Linear, nn.Embedding)):
             nn.init.normal_(m.weight, mean=0.0, std=0.05)
             if isinstance(m, nn.Linear) and m.bias is not None:

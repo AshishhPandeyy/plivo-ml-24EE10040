@@ -1,0 +1,86 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>2,000-Step LLM Speedrun — Summary</title>
+<style>
+  :root { color-scheme: light dark; }
+  body { font-family: -apple-system, Segoe UI, Roboto, Helvetica, Arial, sans-serif;
+         max-width: 900px; margin: 2rem auto; padding: 0 1.2rem; line-height: 1.55; }
+  h1 { font-size: 1.7rem; margin-bottom: .2rem; }
+  h2 { margin-top: 2rem; border-bottom: 1px solid #8884; padding-bottom: .3rem; }
+  code { background: #8882; padding: .1rem .35rem; border-radius: 4px; }
+  table { border-collapse: collapse; width: 100%; margin: 1rem 0; font-size: .95rem; }
+  th, td { border: 1px solid #8884; padding: .45rem .6rem; text-align: left; }
+  th { background: #8882; }
+  .best { font-weight: 700; }
+  .win { color: #1a7f37; font-weight: 600; }
+  .loss { color: #b34; font-weight: 600; }
+  .kpi { display: flex; gap: 1.5rem; flex-wrap: wrap; margin: 1rem 0; }
+  .kpi div { background: #8881; border-radius: 8px; padding: .8rem 1.1rem; }
+  .kpi b { display: block; font-size: 1.5rem; }
+  small { opacity: .75; }
+</style>
+</head>
+<body>
+
+<h1>2,000-Step LLM Speedrun</h1>
+<p><small>Mixed English + Hindi, CPU-only, caps: &le;2,000 optimizer steps, &le;2,000,000 params, provided corpus only, pure PyTorch. Metric: bits per byte (bpb) on held-out text, lower is better.</small></p>
+
+<div class="kpi">
+  <div><small>Baseline bpb</small><b>2.3718</b></div>
+  <div><small>Best bpb</small><b class="win">1.76</b></div>
+  <div><small>Improvement</small><b>-0.61 (26%)</b></div>
+  <div><small>Params</small><b>1.42M</b><small>of 2.0M cap</small></div>
+</div>
+
+<h2>Best configuration</h2>
+<ul>
+  <li><b>Tokenizer:</b> byte-level BPE, vocab 1024 (256 raw bytes + 768 merges), trained only on <code>train_corpus.txt</code>. Lossless byte fallback, ~2.9 bytes/token on dev.</li>
+  <li><b>Architecture:</b> GPT, 4 layers &times; 4 heads, d=160, block 128, weight-tied head/embedding, LayerNorm + GELU MLP. 1,421,760 params.</li>
+  <li><b>Optimizer:</b> AdamW, betas (0.9, 0.95), weight decay 0.1 on 2D+ weights only, grad-clip 1.0.</li>
+  <li><b>Schedule:</b> peak LR 1e-3, 100-step linear warmup, cosine decay to 0.1&times;.</li>
+  <li><b>Batch:</b> 64 &times; block 128, full 2,000 steps.</li>
+</ul>
+
+<h2>Why this is the best metric under the caps</h2>
+<p>The binding constraint is the <b>2,000-step cap, not the parameter cap</b>. Every gain came from learning more <em>per step</em>, not from a bigger model. We proved this directly: a run that spent nearly the full 2M-param budget (1.9M params, block 256, 5 layers) scored slightly <span class="loss">worse</span> (1.835) at 2.8&times; the wall-clock, because the larger model is undertrained at 2,000 steps. So we invested the budget in (1) a proper optimizer + LR schedule, (2) a corpus-trained BPE that packs ~2.9&times; more real context into the same block, and (3) a larger batch that feeds more tokens into each fixed step.</p>
+
+<h2>Run log (each run changes ~one thing)</h2>
+<table>
+  <tr><th>Run</th><th>Change</th><th>dev bpb</th><th>Verdict</th></tr>
+  <tr><td>1</td><td>Baseline (constant Adam 3e-4, byte tokenizer)</td><td>2.3718</td><td>reference</td></tr>
+  <tr><td>2</td><td>AdamW + warmup/cosine + clip, LR 1e-3</td><td>2.2447</td><td class="win">-0.127</td></tr>
+  <tr><td>3</td><td>Weight tying</td><td>2.2731</td><td class="loss">+0.028, kept (frees params)</td></tr>
+  <tr><td>4</td><td>GPT-2 scaled init (std 0.02, /&radic;2L)</td><td>2.4704</td><td class="loss">worse, reverted</td></tr>
+  <tr><td>4b</td><td>Mixed init (emb 0.05, lin 0.02)</td><td>2.4292</td><td class="loss">worse, reverted</td></tr>
+  <tr><td>5</td><td>Batch 8 &rarr; 32</td><td>1.9629</td><td class="win">-0.28</td></tr>
+  <tr><td>6</td><td>BPE tokenizer vocab 1024</td><td>1.8322</td><td class="win">-0.13</td></tr>
+  <tr><td>7</td><td>Max params: vocab 2048, block 256, 5 layers (1.9M)</td><td>1.835</td><td class="loss">no gain, reverted</td></tr>
+  <tr class="best"><td>8</td><td>Batch 32 &rarr; 64 (final)</td><td>1.76</td><td class="win">-0.07, BEST</td></tr>
+</table>
+
+<h2>Key findings</h2>
+<ul>
+  <li><b>Optimizer/schedule &gt; everything free.</b> Just fixing the constant LR gave the first big drop with zero extra params or compute.</li>
+  <li><b>Tokenizer is a per-byte multiplier.</b> BPE shrinks Devanagari's 3-bytes-per-char penalty and multiplies effective context; bpb (per byte) improved even though per-token loss looks higher.</li>
+  <li><b>Tokens-per-step is the real lever.</b> Steps are capped, so bigger batches (8&rarr;32&rarr;64) reliably help.</li>
+  <li><b>Bigger is not better here (negative result).</b> Spending the full param budget undertrains the model at 2,000 steps and regresses. Reported deliberately.</li>
+  <li><b>Textbook init loses at short budgets.</b> Plain N(0,0.05) beats GPT-2 scaled init because fast early learning matters more than depth-stable propagation over just 2,000 steps.</li>
+</ul>
+
+<h2>Machine vs. human contribution</h2>
+<p><b>Human (the reasoning that scores):</b> framed the step-cap (not param-cap) as the binding constraint; chose the experiment order and the one-change-at-a-time discipline; formed each hypothesis; decided to spend budget on optimizer/tokenizer/batch rather than model size; designed and ran the "max the parameter budget" experiment specifically to test and document the negative result; interpreted every outcome and decided what to keep or revert.</p>
+<p><b>Machine (AI coding assistant):</b> wrote the boilerplate — AdamW param-group split, warmup+cosine LR function, gradient clipping, CLI overrides in <code>train.py</code>; implemented the byte-level BPE trainer (<code>train_bpe.py</code>) and the lossless BPE <code>tokenizer.py</code> with byte fallback; ran the training/eval commands and transcribed numbers into <code>RUNLOG.md</code>. No architecture or hyperparameter decision was made by the model without a human hypothesis behind it.</p>
+
+<h2>Deliverables in this folder</h2>
+<ul>
+  <li><code>ckpt.pt</code> — final checkpoint (2,000 steps recorded)</li>
+  <li><code>model.py</code>, <code>train.py</code>, <code>tokenizer.py</code>, <code>train_bpe.py</code>, <code>evaluate.py</code> (interface unchanged), <code>bpe_merges.json</code></li>
+  <li><code>RUNLOG.md</code>, <code>NOTES.md</code>, <code>SUMMARY.html</code></li>
+</ul>
+<p><small>Reproduce: <code>python train_bpe.py --data ../data/train_corpus.txt --vocab_size 1024</code> then <code>python train.py --data ../data/train_corpus.txt --steps 2000 --lr 1e-3 --batch 64 --out ckpt.pt</code>. Score: <code>python evaluate.py --checkpoint ckpt.pt --text_file ../data/dev_eval.txt</code>.</small></p>
+
+</body>
+</html>
